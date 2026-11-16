@@ -276,6 +276,92 @@ def create_ticket_from_mail(*, mail, classification, actor=None, request=None):
     return ticket
 
 
+@transaction.atomic
+def create_ticket_from_whatsapp(*, message, actor=None, request=None):
+    """Create the support ticket for a validated WhatsApp message.
+
+    Idempotent: a message that already has a linked ticket returns it rather
+    than creating a second, so a reprocess or a concurrent run cannot duplicate.
+
+    Unlike create_ticket_from_mail there is no classification step at all.
+    WhatsApp has no subject line, so no [BUG] marker, no rule corpus to match
+    against, and -- by decision -- no fuzzy pass. Every WhatsApp ticket is
+    needs_review=True and lands in the shared unassigned queue for a human to
+    type, project and prioritise during review-assign. That is a product
+    decision, not a limitation to work around by guessing.
+
+    No acknowledgement is queued: phase 1 is receive-only.
+    """
+    if message.linked_ticket_id:
+        return message.linked_ticket
+
+    from apps.accounts.services.system_user import get_whatsapp_intake_user
+    from apps.whatsapp_intake.services.title_service import (
+        build_description, build_title,
+    )
+
+    system_user = get_whatsapp_intake_user()
+    title = build_title(message)
+    description = build_description(message)
+
+    ticket = SupportTicket(
+        company=message.company,
+        ref_no=generate_ref_no(local_today()),
+        # ticket_no stays NULL. Assignment is what turns a request into a
+        # ticket, and review_ticket() mints the number there.
+        source=TicketSource.WHATSAPP,
+        ticket_type=TicketType.UNKNOWN,
+        classification_method=ClassificationMethod.MANUAL,
+        classification_score=None,
+        classification_status=ClassificationStatus.NEEDS_REVIEW,
+        classification_reason="Received via WhatsApp; awaiting human review.",
+        needs_review=True,
+        title=title,
+        description=description,
+        # Always the system user; a PROTECT FK needs a real row and an external
+        # sender has no account. The sender's identity is kept alongside.
+        reported_by=system_user,
+        # The phone number, deliberately. It is the only stable sender key
+        # WhatsApp offers -- from_name is an editable profile name -- and
+        # source=WHATSAPP is what tells a reader this column holds a number
+        # rather than an address.
+        reported_by_email=message.wa_id,
+        reported_by_name=message.from_name or message.wa_id,
+        status=_status_for(TicketType.UNKNOWN, True),
+        created_by=getattr(system_user, "unique_id", None),
+        updated_by=getattr(system_user, "unique_id", None),
+    )
+    ticket.save()
+
+    message.linked_ticket = ticket
+    message.save(update_fields=["linked_ticket", "updated_at"])
+
+    record_audit(
+        action=AuditAction.TICKET_CREATED_FROM_WHATSAPP,
+        entity=ticket,
+        actor=system_user,
+        new_value=ticket.reference,
+        remarks=f"Created from WhatsApp message from {message.wa_id}.",
+        metadata={"source": "SYSTEM", "whatsapp_message_id": str(message.unique_id)},
+        request=request,
+    )
+
+    from apps.tickets.services.activity_service import record_activity
+
+    sender = message.from_name or message.wa_id
+    record_activity(
+        ticket=ticket, event_type="TICKET_RECEIVED", title="Ticket received",
+        description=(
+            f"The request was received via WhatsApp from {sender} "
+            f"and registered as {ticket.ref_no}."
+        ),
+        public_description=f"Your request was received and registered as {ticket.ref_no}.",
+        actor_email="",
+    )
+    _notify_new_ticket(ticket, actor=system_user)
+    return ticket
+
+
 def _require_ticket_type(ticket, allowed):
     from common.exceptions.domain import WorkflowValidationError
 
@@ -586,7 +672,7 @@ def close_ticket(*, ticket, actor, remarks="", request=None):
 
 @transaction.atomic
 def add_ticket_update(*, ticket, update_text, actor=None, source=TicketUpdateSource.USER,
-                      mail=None, remarks="", request=None):
+                      mail=None, whatsapp_message=None, remarks="", request=None):
     """Append an update to a ticket.
 
     Used for email replies that arrive before a ticket is confirmed, when there
@@ -599,6 +685,7 @@ def add_ticket_update(*, ticket, update_text, actor=None, source=TicketUpdateSou
         remarks=remarks,
         source=source,
         mail=mail,
+        whatsapp_message=whatsapp_message,
         created_by_user=actor if getattr(actor, "pk", None) else None,
     )
 
@@ -608,7 +695,9 @@ def add_ticket_update(*, ticket, update_text, actor=None, source=TicketUpdateSou
             entity=ticket,
             actor=actor,
             new_value=update_text[:200],
-            metadata={"source": "SYSTEM" if source == TicketUpdateSource.EMAIL else "USER"},
+            metadata={"source": "SYSTEM" if source in (
+                TicketUpdateSource.EMAIL, TicketUpdateSource.WHATSAPP,
+            ) else "USER"},
             request=request,
         )
     return update

@@ -32,6 +32,8 @@ urlpatterns = [
     path(f"{API_V1}notifications/", include("apps.notifications.urls")),
     path(f"{API_V1}tickets/", include("apps.tickets.urls")),
     path(f"{API_V1}mail-intake/", include("apps.mail_intake.urls")),
+    # Public and signature-verified, deliberately outside the api/v1/ prefix.
+    path("webhooks/whatsapp/", include("apps.whatsapp_intake.webhook_urls")),
 
     path(f"{API_V1}", include("apps.accounts.urls")),
     path(f"{API_V1}", include("apps.masters.urls")),

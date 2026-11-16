@@ -69,6 +69,7 @@ class TicketStatus(models.TextChoices):
 class TicketUpdateSource(models.TextChoices):
     USER = "USER", "User"
     EMAIL = "EMAIL", "Email"
+    WHATSAPP = "WHATSAPP", "WhatsApp"
     SYSTEM = "SYSTEM", "System"
 
 

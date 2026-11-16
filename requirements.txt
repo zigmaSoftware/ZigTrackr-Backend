@@ -35,3 +35,6 @@ daphne==4.2.3
 # ---- ASYNC MAIL INTAKE ----
 celery==5.5.3
 redis==6.4.0
+# WhatsApp media download (Graph API). The only outbound HTTP client
+# in the project; every call site sets an explicit timeout.
+requests==2.32.3

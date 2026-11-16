@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.tickets",
     "apps.mail_intake",
+    "apps.whatsapp_intake",
     "apps.classification",
 ]
 
@@ -148,6 +149,9 @@ REST_FRAMEWORK = {
         # ticket being hammered cannot lock everyone else out.
         "public_otp_request": os.getenv("PUBLIC_OTP_REQUEST_THROTTLE_RATE", "5/min"),
         "public_otp_verify": os.getenv("PUBLIC_OTP_VERIFY_THROTTLE_RATE", "10/min"),
+        # Meta can legitimately burst, so this is generous -- it is a cap on
+        # abuse of a public endpoint, not a shaping mechanism for real traffic.
+        "whatsapp_webhook": os.getenv("WHATSAPP_WEBHOOK_THROTTLE_RATE", "240/min"),
     },
 }
 
@@ -225,7 +229,7 @@ ATTACHMENT_ALLOWED_EXTENSIONS = [
     e.strip().lower()
     for e in os.getenv(
         "ATTACHMENT_ALLOWED_EXTENSIONS",
-        "jpg,jpeg,png,webp,gif,pdf,xlsx,xls,csv,txt,doc,docx,zip,mp4,webm",
+        "jpg,jpeg,png,webp,gif,pdf,xlsx,xls,csv,txt,doc,docx,zip,mp4,webm,ogg,opus",
     ).split(",")
     if e.strip()
 ]
@@ -263,6 +267,59 @@ MAIL_INTAKE_SYSTEM_USERNAME = os.getenv("MAIL_INTAKE_SYSTEM_USERNAME", "mail.int
 # MAIL_INTAKE_POLL_SECONDS is consumed by the Celery Beat schedule below.
 # Do not run a second recurring cron poller alongside Beat.
 
+# ---- WHATSAPP INTAKE (Meta Cloud API) ----
+# Phase 1 is RECEIVE ONLY: no outbound replies, no acknowledgements. The whole
+# feature is gated on WHATSAPP_INTAKE_ENABLED: with it false the webhook refuses
+# requests, no task does work, and the rest of the application behaves exactly
+# as before.
+#
+# NOTE: the official Cloud API carries 1:1 conversations only. It exposes no
+# group messages -- there are no group webhook events and no endpoint to read
+# group history. Nothing here can ingest a group chat.
+WHATSAPP_INTAKE_ENABLED = os.getenv("WHATSAPP_INTAKE_ENABLED", "false").lower() == "true"
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+WHATSAPP_GRAPH_BASE_URL = os.getenv("WHATSAPP_GRAPH_BASE_URL", "https://graph.facebook.com")
+
+# Echoed back during Meta's one-time subscription handshake.
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+# The Meta APP SECRET. Verifies X-Hub-Signature-256 and nothing else. This is
+# the entire security boundary of the public webhook: never logged, never
+# returned by any endpoint, never committed.
+WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
+# A permanent System User token, used only for the two-step media fetch.
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_WABA_ID = os.getenv("WHATSAPP_WABA_ID", "")
+
+# Fallback company for the single-tenant case. Used ONLY when no company has a
+# WhatsApp number configured at all; once any mapping exists an unmapped number
+# resolves to no company rather than silently misrouting into this one.
+WHATSAPP_DEFAULT_COMPANY_CODE = os.getenv("WHATSAPP_DEFAULT_COMPANY_CODE", "ZIGMA")
+
+WHATSAPP_MAX_PAYLOAD_BYTES = int(os.getenv("WHATSAPP_MAX_PAYLOAD_BYTES", "1048576"))
+WHATSAPP_BATCH_LIMIT = int(os.getenv("WHATSAPP_BATCH_LIMIT", "100"))
+WHATSAPP_MAX_ATTEMPTS = int(os.getenv("WHATSAPP_MAX_ATTEMPTS", "3"))
+WHATSAPP_MEDIA_TIMEOUT = int(os.getenv("WHATSAPP_MEDIA_TIMEOUT", "20"))
+WHATSAPP_MEDIA_MAX_ATTEMPTS = int(os.getenv("WHATSAPP_MEDIA_MAX_ATTEMPTS", "3"))
+WHATSAPP_EVENT_RETENTION_DAYS = int(os.getenv("WHATSAPP_EVENT_RETENTION_DAYS", "90"))
+# Username of the non-loginable account that owns WhatsApp-created tickets. The
+# real sender's number is kept on the ticket; see accounts/services/system_user.
+WHATSAPP_INTAKE_SYSTEM_USERNAME = os.getenv("WHATSAPP_INTAKE_SYSTEM_USERNAME", "whatsapp.intake")
+
+# Testing allow-list. While WHATSAPP_ALLOWED_SENDERS is non-empty, ONLY messages
+# from these numbers create tickets; everything else is stored and rejected with
+# SENDER_NOT_ALLOWED, so you can still see in the Inbox that filtering worked.
+# EMPTY MEANS ALLOW ALL -- production behaviour. Numbers are compared by digits
+# only, so "+91 6379088711", "916379088711" and "6379088711" are all the same
+# sender; a bare 10-digit number is matched as a suffix.
+WHATSAPP_ALLOWED_SENDERS = [
+    "".join(ch for ch in s if ch.isdigit())
+    for s in os.getenv("WHATSAPP_ALLOWED_SENDERS", "").split(",")
+    if "".join(ch for ch in s if ch.isdigit())
+]
+
+# WHATSAPP_POLL_SECONDS is consumed by the Celery Beat schedule below.
+
 # ---- CELERY / REDIS ----
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 CELERY_BROKER_TRANSPORT_OPTIONS = {"socket_connect_timeout": 1, "socket_timeout": 1}
@@ -292,6 +349,20 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.tickets.tasks.recover_outbound_mail",
         "schedule": 60.0,
         "options": {"queue": "mail-outbound"},
+    },
+    # Webhook arrival is already near-real-time at the database, so this poll is
+    # the only remaining latency; 20s keeps the median under ten seconds.
+    "process-whatsapp-events": {
+        "task": "apps.whatsapp_intake.tasks.process_whatsapp_events",
+        "schedule": float(os.getenv("WHATSAPP_POLL_SECONDS", "20")),
+        "options": {"queue": "whatsapp-intake"},
+    },
+    # Media lives on its own queue so a Graph API outage cannot back up ticket
+    # creation behind stalled downloads.
+    "retry-whatsapp-media": {
+        "task": "apps.whatsapp_intake.tasks.retry_failed_media",
+        "schedule": 300.0,
+        "options": {"queue": "whatsapp-media"},
     },
 }
 

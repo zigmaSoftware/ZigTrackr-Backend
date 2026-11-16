@@ -38,6 +38,14 @@ class TicketUpdate(models.Model):
         "mail_intake.MailIntake", on_delete=models.PROTECT, null=True, blank=True,
         related_name="ticket_updates", db_column="mail_intake_id",
     )
+    # The WhatsApp equivalent. Parallel to mail rather than a generic relation:
+    # two nullable FKs stay queryable and auditable, which a content-type
+    # pointer would not.
+    whatsapp_message = models.ForeignKey(
+        "whatsapp_intake.WhatsappMessage", on_delete=models.PROTECT,
+        null=True, blank=True, related_name="ticket_updates",
+        db_column="whatsapp_message_id",
+    )
     # Nullable: a system-generated update has no human author, and saying so is
     # more honest than attributing it to an administrator (spec 47).
     created_by_user = models.ForeignKey(

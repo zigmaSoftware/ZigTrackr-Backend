@@ -14,8 +14,8 @@ from django.utils import timezone
 from apps.mail_intake.services.mail_normalizer import compute_dedupe_key, normalize_body
 from apps.mail_intake.services.mail_parser import parse_raw_email
 
-DEFAULT_SENDER = "sadham@zigmaglobal.in"
-DEFAULT_MAILBOX = "itdesk@zigma.in"
+DEFAULT_SENDER = "sadham@zigmaglobal"
+DEFAULT_MAILBOX = "itdesk@zigma"
 
 
 def make_raw_email(

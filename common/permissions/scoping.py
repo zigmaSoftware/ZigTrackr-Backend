@@ -264,3 +264,46 @@ def scope_mail_queryset(queryset, user):
     base |= Q(linked_ticket__in=visible_tickets)
 
     return queryset.filter(base).distinct()
+
+
+def scope_whatsapp_queryset(queryset, user):
+    """Row-level WhatsappMessage visibility.
+
+    Deliberately mirrors scope_mail_queryset above rather than generalising the
+    two, for the reason stated at the top of this module: two explicit
+    functions are easier to audit than one clever helper parameterised over
+    both.
+
+    One notch stricter than mail, though. Mail grants a sender visibility of
+    their own messages by matching the caller's email against from_email. There
+    is no WhatsApp equivalent: the key is a phone number, and matching a
+    caller's number to a sender would turn this queue into a lookup for whose
+    number is whose. So visibility comes only from view_all, from triage
+    authority, or from the ticket the message is attached to.
+
+    An unattributed message (company is NULL, because the business number is
+    not mapped) is visible only to a superuser -- scope_company_queryset does
+    that for free, and it is the correct outcome for a message we cannot
+    confidently route.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return queryset.none()
+
+    queryset = scope_company_queryset(queryset, user)
+    if getattr(user, "is_superuser", False) or has_permission(
+        user, "whatsapp_intake.message.view_all"
+    ):
+        return queryset
+
+    base = Q(pk__in=[])
+
+    # Triage roles need the unlinked and failed messages -- that is the work.
+    if has_permission(user, "whatsapp_intake.message.reprocess"):
+        base |= Q(linked_ticket__isnull=True) | Q(linked_ticket__needs_review=True)
+
+    from apps.tickets.models import SupportTicket
+
+    visible_tickets = scope_ticket_queryset(SupportTicket.objects.all(), user)
+    base |= Q(linked_ticket__in=visible_tickets)
+
+    return queryset.filter(base).distinct()

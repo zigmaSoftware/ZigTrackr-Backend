@@ -17,22 +17,22 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 
 SYSTEM_USER_FULL_NAME = "Mail Intake (System)"
+WHATSAPP_SYSTEM_USER_FULL_NAME = "WhatsApp Intake (System)"
 
 
-def get_mail_intake_user():
-    """Return the non-loginable account that owns email-originated records.
+def _get_system_user(username, full_name):
+    """Shared factory for the non-loginable intake accounts.
 
     Deliberately not cached. An lru_cache would hold a stale ORM instance across
     a rolled-back test database, and one indexed lookup per message is nothing
-    beside the IMAP round-trip that preceded it.
+    beside the network round-trip that preceded it.
     """
     User = get_user_model()
-    username = getattr(settings, "MAIL_INTAKE_SYSTEM_USERNAME", "mail.intake")
 
     user, created = User.objects.get_or_create(
         username=username,
         defaults={
-            "full_name": SYSTEM_USER_FULL_NAME,
+            "full_name": full_name,
             # Left blank on purpose. AbstractUser.email is not unique here and
             # UsernameOrEmailBackend permits logging in by email, so giving this
             # account the intake address would collide with any real member of
@@ -58,9 +58,32 @@ def get_mail_intake_user():
     return user
 
 
+def get_mail_intake_user():
+    """Return the non-loginable account that owns email-originated records."""
+    return _get_system_user(
+        getattr(settings, "MAIL_INTAKE_SYSTEM_USERNAME", "mail.intake"),
+        SYSTEM_USER_FULL_NAME,
+    )
+
+
+def get_whatsapp_intake_user():
+    """Return the non-loginable account that owns WhatsApp-originated records.
+
+    A separate account from the mail one so an audit trail says which channel
+    created a ticket without having to read the source column.
+    """
+    return _get_system_user(
+        getattr(settings, "WHATSAPP_INTAKE_SYSTEM_USERNAME", "whatsapp.intake"),
+        WHATSAPP_SYSTEM_USER_FULL_NAME,
+    )
+
+
 def is_system_user(user):
     """True when `user` is the intake account rather than a person."""
     if user is None:
         return False
-    username = getattr(settings, "MAIL_INTAKE_SYSTEM_USERNAME", "mail.intake")
-    return getattr(user, "username", None) == username
+    usernames = {
+        getattr(settings, "MAIL_INTAKE_SYSTEM_USERNAME", "mail.intake"),
+        getattr(settings, "WHATSAPP_INTAKE_SYSTEM_USERNAME", "whatsapp.intake"),
+    }
+    return getattr(user, "username", None) in usernames

@@ -102,6 +102,18 @@ PERMISSION_CATALOG = [
     ("mail_intake.rules.view", "View Classification Rules", "mail_intake", "rules", "Classification Rules", "view"),
     ("mail_intake.rules.manage", "Manage Classification Rules", "mail_intake", "rules", "Classification Rules", "edit"),
 
+    # ---- WHATSAPP INTAKE ----
+    # No *.access screen codenames here: WhatsApp has no sidebar section of its
+    # own. Its tickets appear in the shared unassigned queue, gated by the
+    # tickets.* permissions that already govern it. These six gate the raw
+    # message API, which is an operator/debug surface only.
+    ("whatsapp_intake.message.view", "View WhatsApp Messages", "whatsapp_intake", "message", "WhatsApp Intake", "view"),
+    ("whatsapp_intake.message.view_all", "View All WhatsApp Messages", "whatsapp_intake", "message", "WhatsApp Intake", "view"),
+    ("whatsapp_intake.message.reprocess", "Reprocess WhatsApp Message", "whatsapp_intake", "message", "WhatsApp Intake", "use"),
+    ("whatsapp_intake.message.ignore", "Ignore / Discard WhatsApp Message", "whatsapp_intake", "message", "WhatsApp Intake", "use"),
+    ("whatsapp_intake.message.process_now", "Trigger WhatsApp Processing", "whatsapp_intake", "message", "WhatsApp Intake", "use"),
+    ("whatsapp_intake.settings.view", "View WhatsApp Settings", "whatsapp_intake", "settings", "WhatsApp Settings", "view"),
+
     # ---- TICKETS ----
     ("tickets.ticket.view", "View Tickets", "tickets", "ticket", "Ticket Management", "view"),
     ("tickets.ticket.view_all", "View All Tickets", "tickets", "ticket", "Ticket Management", "view"),
@@ -185,6 +197,10 @@ ROLE_PERMISSIONS = {
         "mail_intake.mail.ignore",
         # view but not manage: leads need to understand why routing happened.
         "mail_intake.rules.view",
+        # WhatsApp intake: same triage tier as mail. No process_now -- that is
+        # an Admin knob, as it is for mail.
+        "whatsapp_intake.message.view", "whatsapp_intake.message.reprocess",
+        "whatsapp_intake.message.ignore",
         "tickets.ticket.view", "tickets.ticket.classify",
         "tickets.ticket.create", "tickets.ticket.assign", "tickets.ticket.reassign",
         "tickets.ticket.add_update",
@@ -236,6 +252,7 @@ ROLE_PERMISSIONS = {
         # No reprocess, no confirm, no approve. This is the row to re-check when
         # adding anything to Management.
         "mail_intake.mail.view", "mail_intake.mail.view_all",
+        "whatsapp_intake.message.view", "whatsapp_intake.message.view_all",
         "tickets.ticket.view", "tickets.ticket.view_all",
         "access.request.view",
     ],
